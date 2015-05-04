@@ -4,7 +4,7 @@ import numpy.random as npr
 
 class SwingyMonkey:
 
-    def __init__(self, sound=True, text=None, action_callback=None, 
+    def __init__(self, sound=False, text=None, action_callback=None, 
                  reward_callback=None, tick_length=100):
         """Constructor for the SwingyMonkey class.
 
