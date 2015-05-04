@@ -3,26 +3,30 @@ import sys
 
 from SwingyMonkey import SwingyMonkey
 
-pdebug = False
+PDEBUG = False
+CRASH_REPORT = True
+
+if CRASH_REPORT :
+    CRASHES = {1:[],-5:[],-10:[]}
 
 def clamp(s,tt) :
     return (
         max(0,min(s.boff, tt[0]//s.bsize )+s.boff),
         max(0,min(s.boff, tt[1]//s.bsize )+s.boff),
-        max(0,min(s.ybins-1, tt[2]//s.ysize ))
+        max(0,min(s.ybins-1, tt[2]//s.ysize )),
+        max(0,min(s.hoffp, tt[3]//s.hsize )+s.hoffn)
     )
 
 def q(s, tt, a, val=None) :
     t = clamp(s,tt)
     if val is not None : 
-        s.q[t[0]][t[1]][t[2]][a] = val
-    return s.q[t[0]][t[1]][t[2]][a]
+        s.q[t[0]][t[1]][t[2]][t[3]][a] = val
+    return s.q[t[0]][t[1]][t[2]][t[3]][a]
 
 def q_choose(s, tt) :
-    if pdebug:
+    if PDEBUG:
         t = clamp(s,tt)
-        q_prior(s,(t[0]-s.boff,t[1]-s.boff,t[2]))
-        print '( '+str(t[0]-s.boff).ljust(4)+', '+str(t[1]-s.boff).ljust(4)+', '+str(t[2]).ljust(2)+') = [ '+'{:+.1f}'.format(q(s,tt,0))+' , '+'{:+.1f}'.format(q(s,tt,1))+' ] exploited '+('JUMP' if q(s,tt,0) < q(s,tt,1) else 'fall'),
+        print '( '+str(t[0]-s.boff).ljust(4)+', '+str(t[1]-s.boff).ljust(4)+', '+str(t[2]).ljust(2)+', '+str(t[3]-s.hoffn).ljust(3)+') = [ '+'{:+.1f}'.format(q(s,tt,0))+' , '+'{:+.1f}'.format(q(s,tt,1))+' ] exploited '+('JUMP' if q(s,tt,0) < q(s,tt,1) else 'fall'),
     return q(s,tt,0) < q(s,tt,1)
     
 def q_max(s, tt) :
@@ -30,13 +34,13 @@ def q_max(s, tt) :
 
 def q_update(s, tt0, a, tt1, reward) :
     
-    if pdebug:
+    if PDEBUG:
         t0 = clamp(s,tt0)
         t1 = clamp(s,tt1)
         if (reward+s.discount*q_max(s,tt1)-q(s,tt0,a))*s.alpha == 0:
             print ' ; no update'
         else:
-            print ' ; ( '+str(t0[0]-s.boff).ljust(4)+', '+str(t0[1]-s.boff).ljust(4)+', '+str(t0[2]).ljust(2)+')('+('JUMP' if a else 'fall')+') updated '+'{:+.1f}'.format(q(s,t0,a))+' -> '+'{:+.1f}'.format(q(s,t0,a)+(reward+s.discount*q_max(s,t1)-q(s,t0,a))*s.alpha)
+            print ' ; ( '+str(t0[0]-s.boff).ljust(4)+', '+str(t0[1]-s.boff).ljust(4)+', '+str(t0[2]).ljust(2)+', '+str(t0[3]-s.hoffn).ljust(2)+')('+('JUMP' if a else 'fall')+') updated '+'{:+.1f}'.format(q(s,t0,a))+' -> '+'{:+.1f}'.format(q(s,t0,a)+(reward+s.discount*q_max(s,t1)-q(s,t0,a))*s.alpha)
     
     return q(s,tt0,a,
         q(s,tt0,a)+(reward+s.discount*q_max(s,tt1)-q(s,tt0,a))*s.alpha
@@ -46,10 +50,22 @@ def q_prior(s, t) :
     
     ret = [0, 0]
     
-    ret[0] = 1 if (5<t[0] and t[0]<21) else -1
+    ret[0] = 1 if (6<t[0] and t[0]<21) else -1
     
-    if t[2] == s.ybins-1 :
+    if t[3] > 6 and t[0] > -20 : # we're low, but have some time left
+        # don't hop just yet
+        ret[0] = 0
+        ret[1] = -0.1
+    
+    if t[2] == s.ybins-1:
         ret[1] = -9
+    if t[2] == 0:
+        ret[0] = -9
+    
+    if t[3] < 0 and t[1] < 0 : # coming in with high negative speed, captain!
+        # hop!
+        ret[0] = -1
+        ret[1] = 1
     
     if t[0] > 20 : # we're about to hit the top of the tree
         ret[0] = -5
@@ -73,23 +89,22 @@ class Learner:
         self.ep = 0.1
         self.bsize = 10
         self.ybins = 4
+        self.hoffp = 9
+        self.hoffn = 5
         
         self.boff = None
         self.bins = None
         self.ysize = None
+        self.hsize = None
     
     def initparams(self, swing) :
         self.horz_speed = swing.horz_speed
+        self.hsize = self.horz_speed
         self.gravity = swing.gravity
         
         self.boff = swing.screen_height//self.bsize
         self.ysize = swing.screen_height//self.ybins
-        self.q = [[[q_prior(self,(yp-self.boff,yv-self.boff,yb)) for yb in range(self.ybins)] for yv in range(2*self.boff+1)] for yp in range(2*self.boff+1)]
-        
-        print q_prior(self,(0,0,0))
-        print q_prior(self,(6,0,0))
-        print q_prior(self,(16,0,0))
-        print q_prior(self,(21,0,0))
+        self.q = [[[[q_prior(self,(yp-self.boff,yv-self.boff,yb,yh-self.hoffn)) for yh in range(self.hoffp+self.hoffn+1)] for yb in range(self.ybins)] for yv in range(2*self.boff+1)] for yp in range(2*self.boff+1)]
     
     def reset(self):
         #self.last_state  = None
@@ -108,7 +123,7 @@ class Learner:
         future_vel = -self.gravity*time + state['monkey']['vel']
         
         #return {'vel': future_vel, 'pos': future_pos}
-        return (int(future_pos), int(future_vel), state['monkey']['top'])
+        return (int(future_pos), int(future_vel), state['monkey']['top'], state['tree']['dist'])
     
     def action_callback(self, state):
         '''Implement this function to learn things and take actions.
@@ -119,7 +134,7 @@ class Learner:
         if npr.rand() < self.ep :
             # go exploring
             new_action = npr.rand() < 0.1
-            if pdebug:
+            if PDEBUG:
                 print ('explored '+('JUMP' if new_action else 'fall')).ljust(50),
         else :
             # do the right thing
@@ -145,22 +160,26 @@ class Learner:
         '''This gets called so you can see what reward you get.'''
         
         self.last_reward = reward
+        
+        if CRASH_REPORT and reward :
+            CRASHES[reward].append(self.last_tstate)
 
-iters = 1100
+train_iters = 100
+ep_decay = 1
+test_iters = 0
 learner = Learner()
-score_total = 0
+train_total = test_total = 0
 
 # make a fake monkey, to set up some physics bounds
-learner.initparams(SwingyMonkey())
+fake_monkey = SwingyMonkey()
+learner.initparams(fake_monkey)
 
-for ii in xrange(iters):
-    
-    print 'begin iteration '+str(ii)
+for ii in xrange(train_iters+test_iters):
     
     # Make a new monkey object.
     swing = SwingyMonkey(sound=False,            # Don't play sounds.
                          text="Epoch %d" % (ii), # Display the epoch on screen.
-                         tick_length= (1000 if pdebug else 1),          # Make game ticks super fast.
+                         tick_length= (1000 if PDEBUG else 1),          # Make game ticks super fast.
                          action_callback=learner.action_callback,
                          reward_callback=learner.reward_callback)
     
@@ -168,13 +187,35 @@ for ii in xrange(iters):
     while swing.game_loop():
         pass
     
-    if ii == 1000:
-        score_total = 0
-        learner.ep = 0
-    score_total += swing.score
-    print str(ii).ljust(5)+str(swing.score).ljust(3)+str(score_total/(ii%1000+1.0))
+    if ii<train_iters :
+        if ii % (train_iters//20) == 0:
+            learner.ep *= ep_decay
+        train_total += swing.score
+        print 'train '+str(ii).ljust(5)+'ep '+'{:.4f}'.format(learner.ep)+' : '+str(swing.score).ljust(3)+str(train_total/(ii%1000+1.0))
+    else :
+        learner.ep=0
+        test_total += swing.score
+        print 'test '+str(ii-train_iters).ljust(5)+'ep '+'{:.4f}'.format(learner.ep)+' : '+': '+str(swing.score).ljust(3)+str(test_total/(ii%1000+1.0))
     
     # Reset the state of the learner.
     learner.reset()
 
-print 'average: '+str(score_total/(ii%1000+1.0))
+def tstr(s,t) :
+    return '( '+str(t[0]-s.boff).ljust(4)+', '+str(t[1]-s.boff).ljust(4)+', '+str(t[2]).ljust(2)+', '+str(t[3]-s.hoffn).ljust(3)+')'
+
+if CRASH_REPORT :
+    
+    if False :
+        print '\nsuccesses\n'
+        for t in CRASHES[1] :
+            print tstr(learner,t)
+    
+    if True :
+        print '\ntree crashes\n'
+        for t in CRASHES[-5] :
+            print tstr(learner,t)
+    
+    if True :
+        print '\nwall crashes\n'
+        for t in CRASHES[-10] :
+            print tstr(learner,t)
